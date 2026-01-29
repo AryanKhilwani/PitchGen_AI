@@ -1,0 +1,46 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.env
+.venv/
+venv/
+
+# ===== Jupyter =====
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# ===== ML / Data =====
+data/
+datasets/
+checkpoints/
+weights/
+models/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npz
+
+# ===== Logs & Outputs =====
+logs/
+runs/
+wandb/
+*.log
+*.out
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+
+# ===== Experiments =====
+results/
+outputs/
+tmp/
