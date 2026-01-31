@@ -1,0 +1,5 @@
+MAX_CHARS_PER_CHUNK = 1200
+MIN_CHARS_TO_INDEX = 300
+
+VECTOR_DB_DIR = "vector_store"
+COLLECTION_NAME = "company_docs"

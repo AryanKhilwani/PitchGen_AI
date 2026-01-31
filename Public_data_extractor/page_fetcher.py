@@ -1,30 +1,28 @@
-import requests
-from bs4 import BeautifulSoup
-from waf_detector import is_waf_block
-from browser_page_fetcher import fetch_with_browser
-
-# from text_normalizer import normalize_text
-
-HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
+from playwright.async_api import async_playwright
+from text_normalizer import normalize_text
 
 
-def fetch_page(url: str) -> dict:
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        soup = BeautifulSoup(r.text, "html.parser")
-        text = soup.get_text("\n")
+async def fetch_page(url: str) -> dict:
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
 
-        if is_waf_block(text):
-            raise RuntimeError("WAF detected")
+        try:
+            await page.goto(url, timeout=60000)
+            await page.wait_for_load_state("networkidle")
 
-        return {
-            "url": url,
-            "title": soup.title.string if soup.title else "",
-            "text": text,
-            "method": "static",
-        }
+            title = await page.title()
+            text = await page.inner_text("body")
 
-    except Exception:
-        browser_data = fetch_with_browser(url)
-        browser_data["method"] = "browser"
-        return browser_data
+            return {
+                "url": url,
+                "title": title,
+                "text": normalize_text(text),
+                "method": "browser",
+            }
+
+        except Exception:
+            return {}
+
+        finally:
+            await browser.close()

@@ -1,39 +1,27 @@
-from urllib.parse import urlparse
-from link_discovery import discover_links
+import asyncio
+from browser_link_discovery import discover_links_with_browser
 from page_fetcher import fetch_page
 
 
-def crawl_website(base_url: str, max_pages: int = 25) -> dict:
-    """
-    Crawl an entire website starting from base_url.
+async def async_crawl_website(base_url: str, max_pages: int = 30) -> dict:
+    urls = await discover_links_with_browser(base_url, max_urls=max_pages)
 
-    Returns:
-        pages: {
-            url: {
-                url,
-                title,
-                text,
-                method
-            }
-        }
-    """
+    semaphore = asyncio.Semaphore(5)  # throttle
 
-    # Step 1: discover internal URLs
-    discovered_urls = discover_links(base_url, max_urls=max_pages)
+    async def fetch_with_limit(url):
+        async with semaphore:
+            return await fetch_page(url)
+
+    tasks = [fetch_with_limit(url) for url in urls]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     pages = {}
-    for url in discovered_urls:
-        try:
-            page_data = fetch_page(url)
-
-            # Drop empty / useless pages early
-            if not page_data.get("text") or len(page_data["text"]) < 300:
-                continue
-
-            pages[url] = page_data
-
-        except Exception:
-            # Fail silently per page — crawler must be robust
-            continue
+    for result in results:
+        if isinstance(result, dict) and "url" in result:
+            pages[result["url"]] = result
 
     return pages
+
+
+def crawl_website(base_url: str, max_pages: int = 30) -> dict:
+    return asyncio.run(async_crawl_website(base_url, max_pages))

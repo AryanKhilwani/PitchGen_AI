@@ -1,31 +1,36 @@
-from playwright.sync_api import sync_playwright
-from urllib.parse import urlparse, urljoin
+from playwright.async_api import async_playwright
+from urllib.parse import urljoin, urlparse
 
 
-def discover_links_with_browser(base_url: str, max_urls=30) -> set[str]:
-    urls = set()
-    domain = urlparse(base_url).netloc
+async def discover_links_with_browser(base_url: str, max_urls: int = 50) -> set[str]:
+    discovered = set()
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(base_url, timeout=30000)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
 
-        anchors = page.query_selector_all("a[href]")
-        for a in anchors:
-            href = a.get_attribute("href")
+        await page.goto(base_url, timeout=60000)
+        await page.wait_for_load_state("networkidle")
+
+        anchors = await page.eval_on_selector_all(
+            "a[href]", "els => els.map(e => e.getAttribute('href'))"
+        )
+
+        for href in anchors:
             if not href:
                 continue
 
-            full = urljoin(base_url, href)
-            parsed = urlparse(full)
+            full_url = urljoin(base_url, href)
+            parsed = urlparse(full_url)
 
-            if parsed.netloc == domain:
-                urls.add(parsed.scheme + "://" + parsed.netloc + parsed.path)
+            if parsed.netloc != urlparse(base_url).netloc:
+                continue
 
-            if len(urls) >= max_urls:
+            discovered.add(full_url)
+
+            if len(discovered) >= max_urls:
                 break
 
-        browser.close()
+        await browser.close()
 
-    return urls
+    return discovered

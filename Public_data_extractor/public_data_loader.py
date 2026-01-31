@@ -1,16 +1,20 @@
 from website_discovery import find_company_website
 from website_crawler import crawl_website
-from datetime import datetime
+from hierarchy_builder import build_page_hierarchy
+from datetime import datetime, timezone
+
+
 import os
 import json
 
 
 class PublicDataLoader:
-    def run(self, company_name: str, max_pages: int = 20) -> dict:
+    def run(self, company_name: str, max_pages: int = 30) -> dict:
         website = find_company_website(company_name)
 
-        # Crawl entire website (not just homepage)
-        pages = crawl_website(website, max_pages=max_pages)
+        flat_pages = crawl_website(website, max_pages=max_pages)
+
+        hierarchical_pages = build_page_hierarchy(flat_pages)
 
         return {
             "company_name": company_name,
@@ -18,10 +22,10 @@ class PublicDataLoader:
                 "base_url": website,
                 "discovered_via": "llm",
             },
-            "pages": pages,
+            "pages": hierarchical_pages,
             "metadata": {
-                "crawl_time": datetime.utcnow().isoformat(),
-                "page_count": len(pages),
+                "crawl_time": datetime.now(timezone.utc).isoformat(),
+                "page_count": len(flat_pages),
             },
         }
 

@@ -1,47 +1,49 @@
 from playwright.sync_api import sync_playwright
-
-# from text_normalizer import normalize_text
-from urllib.parse import urlparse
+from text_normalizer import normalize_text
 
 
-def derive_title_from_url(url: str) -> str:
-    path = urlparse(url).path.strip("/")
-    if not path:
-        return ""
+class BrowserFetcher:
+    def __init__(self):
+        self.playwright = sync_playwright().start()
+        self.browser = self.playwright.chromium.launch(headless=True)
 
-    parts = path.split("/")
-    return " – ".join(p.replace("-", " ").title() for p in parts[-2:])
+    def fetch(self, url: str) -> dict:
+        page = self.browser.new_page()
+        page.goto(url, timeout=30000, wait_until="networkidle")
 
-
-def fetch_with_browser(url: str) -> dict:
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(url, timeout=30000)
-
-        # 1️⃣ Try H1
+        # ----- TITLE LOGIC (unchanged, just safer) -----
         h1 = page.query_selector("h1")
-        h1_text = h1.inner_text().strip() if h1 else ""
+        title = h1.inner_text().strip() if h1 else page.title()
 
-        # 2️⃣ Try breadcrumbs
-        breadcrumb_nodes = page.query_selector_all(
-            "nav a, .breadcrumb a, .breadcrumbs a"
-        )
-        breadcrumb_text = " > ".join(
-            [b.inner_text().strip() for b in breadcrumb_nodes if b.inner_text()]
-        )
+        # ----- SEGMENTED CONTENT EXTRACTION -----
+        def safe_inner_text(selector: str) -> str:
+            try:
+                el = page.query_selector(selector)
+                return normalize_text(el.inner_text()) if el else ""
+            except Exception:
+                return ""
 
-        # 3️⃣ Fallback title
-        fallback_title = page.title()
+        main_text = safe_inner_text("main")
+        nav_text = safe_inner_text("nav")
+        footer_text = safe_inner_text("footer")
 
-        # 4️⃣ URL-derived title
-        url_title = derive_title_from_url(url)
+        # Fallback: entire page body
+        full_text = normalize_text(page.inner_text("body"))
 
-        # Priority resolution
-        title = h1_text or breadcrumb_text or url_title or fallback_title
+        page.close()
 
-        text = page.inner_text("body")
+        return {
+            "url": url,
+            "title": title,
+            "content_blocks": {
+                "main": main_text,
+                "nav": nav_text,
+                "footer": footer_text,
+                "full": full_text,
+            },
+            "method": "browser",
+        }
 
-        browser.close()
-
-    return {"url": url, "title": title, "text": text}
+    def close(self):
+        self.browser.close()
+        self.playwright.stop()
