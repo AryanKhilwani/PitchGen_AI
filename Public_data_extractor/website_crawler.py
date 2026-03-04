@@ -6,7 +6,7 @@ from page_fetcher import fetch_page
 async def async_crawl_website(base_url: str, max_pages: int = 30) -> dict:
     urls = await discover_links_with_browser(base_url, max_urls=max_pages)
 
-    semaphore = asyncio.Semaphore(5)  # throttle
+    semaphore = asyncio.Semaphore(5)
 
     async def fetch_with_limit(url):
         async with semaphore:

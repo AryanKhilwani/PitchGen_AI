@@ -11,11 +11,9 @@ class BrowserFetcher:
         page = self.browser.new_page()
         page.goto(url, timeout=30000, wait_until="networkidle")
 
-        # ----- TITLE LOGIC (unchanged, just safer) -----
         h1 = page.query_selector("h1")
         title = h1.inner_text().strip() if h1 else page.title()
 
-        # ----- SEGMENTED CONTENT EXTRACTION -----
         def safe_inner_text(selector: str) -> str:
             try:
                 el = page.query_selector(selector)
@@ -27,7 +25,6 @@ class BrowserFetcher:
         nav_text = safe_inner_text("nav")
         footer_text = safe_inner_text("footer")
 
-        # Fallback: entire page body
         full_text = normalize_text(page.inner_text("body"))
 
         page.close()
