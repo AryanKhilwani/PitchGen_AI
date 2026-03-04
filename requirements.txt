@@ -52,3 +52,7 @@ typing_extensions==4.15.0
 uritemplate==4.2.0
 urllib3==2.6.3
 websockets==15.0.1
+python-dotenv>=1.0.0
+tiktoken>=0.7.0
+sentence-transformers>=3.0.0
+faiss-cpu>=1.7.0
