@@ -1,7 +1,7 @@
 """
 Agents — Agentic Investment Presentation Generator
 
-A 6-agent LangGraph pipeline that generates polished .pptx
+A multi-agent LangGraph pipeline that generates polished .pptx
 investment presentations from indexed company data.
 
 Usage:
@@ -13,6 +13,8 @@ Pipeline:
     3. Data Grounding → evidence-checked plan + chartable data
     4. Slide Content → text content per slide
     5. Quality Assurance → consistency/accuracy review (loops if needed)
-    6. Slide Design → layout + chart specs
-    7. PPTX Renderer → .pptx file (deterministic)
+    6. Slide Design → layout + composition + deck theme
+    7. Visual QA → design variety check (loops if needed)
+    8. Image Generation → AI hero visuals for selected slides
+    9. PPTX Renderer → .pptx file (deterministic)
 """

@@ -65,6 +65,14 @@ Review the complete set of slide contents for quality, consistency, and investme
 - Financial terms used correctly
 - Consistent formatting (e.g., all currency in same format)
 
+### 7. Visual Variety & Layout Balance
+
+- Flag 3+ consecutive slides that use the same visual_type or layout (e.g., bullet_list → bullet_list → bullet_list is monotonous)
+- Text-heavy slides with 6+ bullets and no visual_intent should suggest a diagram, timeline, or card_grid
+- Ensure the deck has a mix: at least one data-visual slide (kpi_strip, chart), one structure slide (timeline, process_flow, comparison_matrix), and narrative slides
+- Section dividers should appear between major topic transitions — flag if missing between distinct themes
+- If all slides use the same layout template, flag as warning: "deck feels templated — vary layouts"
+
 ## Severity Levels
 
 - **critical**: Must be fixed before rendering. Financial errors, factual contradictions, missing key slides.

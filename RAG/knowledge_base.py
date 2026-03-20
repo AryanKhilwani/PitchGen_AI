@@ -2,15 +2,130 @@
 Knowledge Base Loader
 Loads and flattens both public and private company data into
 a list of documents (text chunks with metadata) for embedding.
+
+v2: each document's metadata now includes a `content_hints` list that
+    tells downstream agents what visual structures the section can feed
+    (e.g. "timeline", "process_steps", "comparison", "metrics", etc.).
+    No LLM call is needed — hints are inferred from section names and
+    lightweight text patterns.
 """
 
 import json
+import re
 from typing import List, Dict
 
 
 def load_json(path: str) -> dict:
     with open(path, "r") as f:
         return json.load(f)
+
+
+# ── Semantic hint inference (no LLM needed) ──────────────────────────────
+
+# Section-name keywords → content hint labels
+_SECTION_HINT_MAP: dict[str, list[str]] = {
+    # Timeline / chronology
+    "milestone": ["timeline"],
+    "history": ["timeline"],
+    "journey": ["timeline"],
+    "timeline": ["timeline"],
+    "founded": ["timeline"],
+    # Process / steps
+    "process": ["process_steps"],
+    "workflow": ["process_steps"],
+    "manufacturing": ["process_steps"],
+    "supply chain": ["process_steps", "linear_chain"],
+    "value chain": ["linear_chain"],
+    # Comparison / SWOT
+    "swot": ["comparison"],
+    "strength": ["comparison"],
+    "weakness": ["comparison"],
+    "opportunity": ["comparison"],
+    "threat": ["comparison"],
+    "competitive": ["comparison"],
+    "peer": ["comparison"],
+    "benchmark": ["comparison"],
+    # Metrics / KPIs
+    "financial": ["metrics", "time_series"],
+    "revenue": ["metrics", "time_series"],
+    "profit": ["metrics", "time_series"],
+    "performance": ["metrics"],
+    "key metric": ["metrics"],
+    "kpi": ["metrics"],
+    "operational indicator": ["metrics"],
+    # Relationships / hierarchy
+    "shareholder": ["composition", "tabular"],
+    "ownership": ["composition"],
+    "management": ["hierarchy"],
+    "leadership": ["hierarchy"],
+    "team": ["hierarchy"],
+    "board": ["hierarchy"],
+    "organization": ["hierarchy"],
+    # Portfolio / products
+    "product": ["portfolio"],
+    "service": ["portfolio"],
+    "portfolio": ["portfolio"],
+    "offering": ["portfolio"],
+    "segment": ["portfolio", "composition"],
+    # Geography / network
+    "global": ["geography"],
+    "location": ["geography"],
+    "presence": ["geography"],
+    "export": ["geography"],
+    "client": ["relationship_list"],
+    "partner": ["relationship_list"],
+    "customer": ["relationship_list"],
+    # Tabular
+    "certification": ["tabular"],
+    "rating": ["tabular"],
+    "award": ["tabular"],
+}
+
+# Text-body patterns (compiled once)
+_DATE_PATTERN = re.compile(
+    r"\b(FY\d{2,4}|Q[1-4]\s*FY\d{2,4}|\d{4}[-–]\d{2,4}|\b(?:19|20)\d{2}\b)",
+    re.IGNORECASE,
+)
+_NUMBERED_STEP = re.compile(r"(?:^|\n)\s*(?:\d+[.)]\s|step\s+\d)", re.IGNORECASE)
+_TABLE_ROW = re.compile(r"\|.*\|.*\|")
+_PERCENTAGE = re.compile(r"\d+\.?\d*\s*%")
+
+
+def _infer_content_hints(section_name: str, text: str) -> list[str]:
+    """Return a list of semantic hint strings for a document chunk.
+
+    Uses section name keywords + lightweight regex on the text body.
+    Cheap enough to run at indexing time for every chunk.
+    """
+    hints: set[str] = set()
+    section_lower = section_name.lower()
+
+    # 1. Section-name keyword matching
+    for keyword, labels in _SECTION_HINT_MAP.items():
+        if keyword in section_lower:
+            hints.update(labels)
+
+    # 2. Text-body pattern matching
+    date_matches = _DATE_PATTERN.findall(text)
+    if len(date_matches) >= 3:
+        hints.add("time_series")
+    if len(date_matches) >= 2 and any(
+        w in section_lower for w in ("milestone", "history", "journey", "timeline")
+    ):
+        hints.add("timeline")
+
+    if _NUMBERED_STEP.search(text):
+        hints.add("process_steps")
+
+    table_rows = _TABLE_ROW.findall(text)
+    if len(table_rows) >= 2:
+        hints.add("tabular")
+
+    pct_matches = _PERCENTAGE.findall(text)
+    if len(pct_matches) >= 3:
+        hints.add("composition")
+
+    return sorted(hints) if hints else ["general"]
 
 
 def flatten_public_data(data: dict) -> List[Dict]:
@@ -47,6 +162,7 @@ def flatten_public_data(data: dict) -> List[Dict]:
                         "category": category,
                         "section": subcat_key,
                         "section_title": section_title,
+                        "content_hints": _infer_content_hints(section_title, text),
                     },
                 }
             )
@@ -102,6 +218,9 @@ def flatten_private_data(data: dict) -> List[Dict]:
                                 "section": section_name,
                                 "part": i + 1,
                                 "filename": filename,
+                                "content_hints": _infer_content_hints(
+                                    section_name, chunk
+                                ),
                             },
                         }
                     )
@@ -115,6 +234,9 @@ def flatten_private_data(data: dict) -> List[Dict]:
                             "company": company_name,
                             "section": section_name,
                             "filename": filename,
+                            "content_hints": _infer_content_hints(
+                                section_name, text_str
+                            ),
                         },
                     }
                 )

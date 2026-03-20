@@ -29,6 +29,7 @@ from pptx.oxml.ns import qn
 
 from Agents.state import PresentationState
 from Agents.icon_manager import resolve_icon_for_bullet
+from Agents.component_renderer import render_composition
 
 
 # Slide dimensions (widescreen 16:9)
@@ -151,6 +152,27 @@ def _font(design: dict, element: str) -> dict:
     }
 
 
+def _responsive_title_size(design: dict, content: dict) -> int:
+    """Compute an adaptive title font size based on slide content density.
+
+    Bold/editorial mood slides with sparse content get bigger titles;
+    dense data slides get smaller titles.  Returns an adjusted pt size.
+    """
+    base_size = _font(design, "title")["size"]
+    mood = design.get("slide_mood", "light")
+    n_bullets = len(content.get("bullets", []))
+    has_chart = design.get("chart_type") not in (None, "none", "")
+    n_supporting = len(content.get("supporting_data", []))
+
+    # Bold mood / editorial with few elements → boost
+    if mood in ("bold", "editorial") and n_bullets <= 2 and not has_chart:
+        return min(base_size + 8, 48)
+    # Data-heavy → shrink slightly to make room
+    if n_bullets > 6 or (has_chart and n_supporting > 3):
+        return max(base_size - 4, 22)
+    return base_size
+
+
 def _hex_to_rgb(hex_color: str) -> RGBColor:
     """Convert hex color string to RGBColor."""
     hex_color = hex_color.lstrip("#")
@@ -172,12 +194,37 @@ def _lighten(hex_color: str, factor: float = 0.85) -> RGBColor:
     return RGBColor(min(r, 255), min(g, 255), min(b, 255))
 
 
-def _add_background(slide, hex_color: str):
-    """Set slide background to a solid color."""
-    background = slide.background
-    fill = background.fill
-    fill.solid()
-    fill.fore_color.rgb = _hex_to_rgb(hex_color)
+def _add_background(slide, hex_color: str, hex_end: str = None):
+    """Set slide background to a solid color, or gradient if hex_end given."""
+    if hex_end:
+        # Gradient background via a full-slide shape (DrawingML gradient)
+        from lxml import etree
+
+        shape = slide.shapes.add_shape(
+            1, Inches(0), Inches(0), SLIDE_WIDTH, SLIDE_HEIGHT
+        )
+        shape.line.fill.background()
+        sp_pr = shape._element.spPr
+        # Remove any existing fill
+        for child in list(sp_pr):
+            if (
+                child.tag.endswith("}solidFill")
+                or child.tag.endswith("}gradFill")
+                or child.tag.endswith("}noFill")
+            ):
+                sp_pr.remove(child)
+        grad = etree.SubElement(sp_pr, qn("a:gradFill"))
+        gs_lst = etree.SubElement(grad, qn("a:gsLst"))
+        gs0 = etree.SubElement(gs_lst, qn("a:gs"), pos="0")
+        srgb0 = etree.SubElement(gs0, qn("a:srgbClr"), val=hex_color.lstrip("#"))
+        gs1 = etree.SubElement(gs_lst, qn("a:gs"), pos="100000")
+        srgb1 = etree.SubElement(gs1, qn("a:srgbClr"), val=hex_end.lstrip("#"))
+        etree.SubElement(grad, qn("a:lin"), ang="5400000", scaled="1")
+    else:
+        background = slide.background
+        fill = background.fill
+        fill.solid()
+        fill.fore_color.rgb = _hex_to_rgb(hex_color)
 
 
 def _add_textbox(
@@ -440,13 +487,20 @@ def _render_metric_cards(
             )
 
 
-def _render_title_slide(prs, content: dict, design: dict, image_map: dict = None):
+def _render_title_slide(
+    prs, content: dict, design: dict, image_map: dict = None, deck_theme: dict = None
+):
     """Render a full-screen title/cover slide with decorative elements."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank layout
     accent = design.get("color_accent", DEFAULT_ACCENT)
     tf_spec = _font(design, "title")
     sf_spec = _font(design, "subtitle")
-    _add_background(slide, accent)
+
+    # Use gradient background from deck_theme if available
+    grad_end = None
+    if deck_theme and deck_theme.get("gradient_end"):
+        grad_end = deck_theme["gradient_end"]
+    _add_background(slide, accent, hex_end=grad_end)
 
     # Decorative lighter rectangle overlay (top-right area)
     overlay = slide.shapes.add_shape(1, Inches(7), Inches(0), Inches(6.333), Inches(3))
@@ -523,14 +577,19 @@ def _render_title_slide(prs, content: dict, design: dict, image_map: dict = None
         slide.notes_slide.notes_text_frame.text = notes
 
 
-def _render_section_header(prs, content: dict, design: dict, image_map: dict = None):
+def _render_section_header(
+    prs, content: dict, design: dict, image_map: dict = None, deck_theme: dict = None
+):
     """Render a section header/divider slide with accent bar and decorative elements."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
     accent = design.get("color_accent", DEFAULT_ACCENT)
     tf_spec = _font(design, "title")
     sf_spec = _font(design, "subtitle")
 
-    # Wide accent bar on left
+    # Gradient left bar when deck_theme available
+    secondary = deck_theme.get("secondary_color", accent) if deck_theme else accent
+
+    # Wide accent bar on left (gradient)
     left_bar = slide.shapes.add_shape(
         1, Inches(0), Inches(0), Inches(0.5), SLIDE_HEIGHT
     )
@@ -538,7 +597,7 @@ def _render_section_header(prs, content: dict, design: dict, image_map: dict = N
     left_bar.fill.fore_color.rgb = _hex_to_rgb(accent)
     left_bar.line.fill.background()
 
-    # Light accent block in background
+    # Light accent block in background with subtle gradient toward secondary
     bg_block = slide.shapes.add_shape(
         1, Inches(0.5), Inches(2), Inches(12.833), Inches(3.5)
     )
@@ -583,7 +642,9 @@ def _render_section_header(prs, content: dict, design: dict, image_map: dict = N
         slide.notes_slide.notes_text_frame.text = notes
 
 
-def _render_title_content(prs, content: dict, design: dict, image_map: dict = None):
+def _render_title_content(
+    prs, content: dict, design: dict, image_map: dict = None, **kwargs
+):
     """Render a standard title + bullet content slide with icon bullets and optional image."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
     accent = design.get("color_accent", DEFAULT_ACCENT)
@@ -709,7 +770,9 @@ def _render_title_content(prs, content: dict, design: dict, image_map: dict = No
         slide.notes_slide.notes_text_frame.text = notes
 
 
-def _render_two_column(prs, content: dict, design: dict, image_map: dict = None):
+def _render_two_column(
+    prs, content: dict, design: dict, image_map: dict = None, **kwargs
+):
     """Render an enhanced two-column layout slide with decorative divider."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
     accent = design.get("color_accent", DEFAULT_ACCENT)
@@ -814,7 +877,9 @@ def _render_two_column(prs, content: dict, design: dict, image_map: dict = None)
         slide.notes_slide.notes_text_frame.text = notes
 
 
-def _render_chart_slide(prs, content: dict, design: dict, image_map: dict = None):
+def _render_chart_slide(
+    prs, content: dict, design: dict, image_map: dict = None, **kwargs
+):
     """Render a slide with a chart and decorative elements."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
     accent = design.get("color_accent", DEFAULT_ACCENT)
@@ -1003,7 +1068,9 @@ def _render_bullets_on_slide(slide, content: dict):
         p.space_after = Pt(8)
 
 
-def _render_table_slide(prs, content: dict, design: dict, image_map: dict = None):
+def _render_table_slide(
+    prs, content: dict, design: dict, image_map: dict = None, **kwargs
+):
     """Render a slide with a data table."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
     accent = design.get("color_accent", DEFAULT_ACCENT)
@@ -1110,6 +1177,7 @@ def render(state: PresentationState) -> dict:
     slide_contents = state["slide_contents"]
     design_specs = state["design_specs"]
     image_map = state.get("image_map", {})
+    deck_theme = state.get("deck_theme")
 
     print(f"\n{'='*60}")
     print(f"[Renderer] Building PPTX — {company_name}")
@@ -1127,19 +1195,237 @@ def render(state: PresentationState) -> dict:
         design = _match_design_spec(slide_id, design_specs)
         layout = design.get("layout", "title_content")
         chart_type = design.get("chart_type", "none")
+        composition = design.get("composition")
 
-        # Handle table type as a special layout
-        if chart_type == "table":
-            renderer = _render_table_slide
+        # Composition-aware path: use component renderer when composition exists
+        if composition and composition.get("components"):
+            # Use blank layout as canvas for component-based rendering
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            accent = design.get("color_accent", DEFAULT_ACCENT)
+            tf = _font(design, "title")
+
+            # --- Background treatment (Gamma-style visual mood) ---
+            bg_treatment = design.get("background_treatment", "solid_surface")
+            slide_mood = design.get("slide_mood", "light")
+            palette = (deck_theme or {}).get("palette", {})
+            primary = palette.get("primary", accent)
+            secondary = palette.get("secondary", accent)
+            surface = palette.get("surface", "#F0F4F8")
+
+            # Determine text colors based on mood (dark bg → white text)
+            is_dark_bg = slide_mood in ("bold", "accent") or bg_treatment in (
+                "dark_solid",
+                "gradient_brand",
+                "full_bleed_image",
+            )
+            title_color = (
+                WHITE
+                if is_dark_bg
+                else (_hex_to_rgb(tf["color"]) if tf.get("color") else DARK)
+            )
+
+            if bg_treatment == "gradient_brand":
+                _add_background(slide, primary, hex_end=secondary)
+            elif bg_treatment == "dark_solid":
+                _add_background(slide, primary)
+            elif bg_treatment == "full_bleed_image":
+                # Image placed below; components add overlay + text on top
+                if slide_id in image_map and os.path.isfile(image_map[slide_id]):
+                    _add_image_to_slide(
+                        slide,
+                        image_map[slide_id],
+                        Inches(0),
+                        Inches(0),
+                        SLIDE_WIDTH,
+                        SLIDE_HEIGHT,
+                    )
+            elif bg_treatment == "split_image":
+                # Solid bg; image placed on one side by the image logic below
+                _add_background(slide, surface)
+            elif bg_treatment == "subtle_pattern":
+                _add_background(slide, surface)
+                # Add a faint dot motif in the corner
+                from Agents.component_renderer import _add_dot_pattern
+
+                _add_dot_pattern(
+                    slide, 10.5, 5.5, 5, 4, 0.35, 0.06, primary, opacity=0.12
+                )
+            else:
+                # solid_surface (default)
+                _add_background(slide, surface)
+
+            # Render slide title (skip for full_bleed_image — component handles it)
+            title_text = content.get("title", "")
+            if title_text and bg_treatment != "full_bleed_image":
+                adaptive_size = _responsive_title_size(design, content)
+                _add_textbox(
+                    slide,
+                    Inches(0.5),
+                    Inches(0.3),
+                    Inches(12.3),
+                    Inches(0.9),
+                    title_text,
+                    font_size=adaptive_size,
+                    bold=tf["bold"],
+                    color=title_color,
+                    font_name=tf["font"],
+                )
+                if not is_dark_bg:
+                    _add_accent_bar_top(slide, accent)
+
+            # Render components
+            render_composition(slide, composition, content, design, deck_theme)
+
+            # Handle chart_panel components via existing chart logic
+            for comp in composition.get("components", []):
+                if (
+                    comp.get("type") == "chart_panel"
+                    and chart_type
+                    and chart_type != "none"
+                ):
+                    chart_data = design.get("chart_data")
+                    if chart_data:
+                        # Render chart in the component's region
+                        _render_chart_slide(prs, content, design, image_map)
+                        # Remove the extra slide the chart renderer added
+                        # (the chart was rendered on a new slide; we keep the composition slide)
+                        break
+
+            # Add image if present — position depends on composition layout
+            if slide_id in image_map and bg_treatment != "full_bleed_image":
+                img_path = image_map[slide_id]
+                if os.path.isfile(img_path):
+                    has_side_note = any(
+                        c.get("region") == "side_note"
+                        for c in composition.get("components", [])
+                    )
+                    has_image_panel = any(
+                        c.get("type") == "image_panel"
+                        for c in composition.get("components", [])
+                    )
+                    has_split_hero = any(
+                        c.get("type") == "split_hero"
+                        for c in composition.get("components", [])
+                    )
+                    has_media_overlay = any(
+                        c.get("type") == "media_overlay"
+                        for c in composition.get("components", [])
+                    )
+
+                    if has_media_overlay:
+                        # Full-slide image behind the overlay card
+                        _add_image_to_slide(
+                            slide,
+                            img_path,
+                            Inches(0),
+                            Inches(0),
+                            SLIDE_WIDTH,
+                            SLIDE_HEIGHT,
+                        )
+                    elif has_split_hero:
+                        # Determine image side from the component props
+                        hero_comp = next(
+                            (
+                                c
+                                for c in composition["components"]
+                                if c.get("type") == "split_hero"
+                            ),
+                            {},
+                        )
+                        image_side = hero_comp.get("props", {}).get(
+                            "image_side", "left"
+                        )
+                        if image_side == "right":
+                            _add_image_to_slide(
+                                slide,
+                                img_path,
+                                Inches(7.7),
+                                Inches(0),
+                                Inches(5.633),
+                                SLIDE_HEIGHT,
+                            )
+                        else:
+                            _add_image_to_slide(
+                                slide,
+                                img_path,
+                                Inches(0),
+                                Inches(0),
+                                Inches(5.6),
+                                SLIDE_HEIGHT,
+                            )
+                    elif bg_treatment == "split_image":
+                        # Image fills one side for split_image treatment
+                        _add_image_to_slide(
+                            slide,
+                            img_path,
+                            Inches(0),
+                            Inches(0),
+                            Inches(5.6),
+                            SLIDE_HEIGHT,
+                        )
+                    elif has_image_panel:
+                        # Image IS the visual — place prominently
+                        _add_image_to_slide(
+                            slide,
+                            img_path,
+                            Inches(0.5),
+                            Inches(1.6),
+                            Inches(7.8),
+                            Inches(5.0),
+                        )
+                    elif has_side_note:
+                        # Side note occupied — tuck image into bottom-right
+                        _add_image_to_slide(
+                            slide,
+                            img_path,
+                            Inches(9.0),
+                            Inches(3.5),
+                            Inches(3.8),
+                            Inches(3.2),
+                        )
+                    elif layout == "title_slide":
+                        # Cover slide — large hero image on right half
+                        _add_image_to_slide(
+                            slide,
+                            img_path,
+                            Inches(7.5),
+                            Inches(1.0),
+                            Inches(5.3),
+                            Inches(5.5),
+                        )
+                    else:
+                        # Default: right-aligned supplemental
+                        _add_image_to_slide(
+                            slide,
+                            img_path,
+                            Inches(9.5),
+                            Inches(1.8),
+                            Inches(3.5),
+                            Inches(3.5),
+                        )
+
+            comp_types = [c.get("type") for c in composition.get("components", [])]
+            print(
+                f"  Rendering [{slide_id}] → composition: {', '.join(comp_types)}"
+                + (f" + image" if slide_id in image_map else "")
+            )
         else:
-            renderer = LAYOUT_RENDERERS.get(layout, _render_title_content)
+            # Legacy path: use layout-based rendering
+            if chart_type == "table":
+                renderer = _render_table_slide
+            else:
+                renderer = LAYOUT_RENDERERS.get(layout, _render_title_content)
 
-        print(
-            f"  Rendering [{slide_id}] → {layout}"
-            + (f" + {chart_type} chart" if chart_type and chart_type != "none" else "")
-            + (f" + image" if slide_id in image_map else "")
-        )
-        renderer(prs, content, design, image_map)
+            print(
+                f"  Rendering [{slide_id}] → {layout}"
+                + (
+                    f" + {chart_type} chart"
+                    if chart_type and chart_type != "none"
+                    else ""
+                )
+                + (f" + image" if slide_id in image_map else "")
+            )
+            renderer(prs, content, design, image_map, deck_theme=deck_theme)
 
         # Add footer to all slides except title_slide
         if layout != "title_slide":

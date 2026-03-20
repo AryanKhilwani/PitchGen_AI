@@ -1,10 +1,11 @@
 """
 Orchestrator — LangGraph StateGraph definition and runner.
 
-Defines the 6-agent pipeline with a QA feedback loop:
+Defines the agent pipeline with two QA feedback loops:
     company_understanding → presentation_strategy → data_grounding
     → slide_content → quality_assurance → (conditional loop or proceed)
-    → slide_design → pptx_render
+    → slide_design → visual_qa → (conditional loop or proceed)
+    → image_generation → pptx_render
 """
 
 import os
@@ -25,6 +26,7 @@ from Agents import (
     slide_content,
     quality_assurance,
     slide_design,
+    visual_qa,
 )
 from Agents.pptx_renderer import render as pptx_render
 from Agents.image_generator import generate_images_for_slides
@@ -32,6 +34,7 @@ from Agents.image_generator import generate_images_for_slides
 
 # Maximum QA revision loops before forcing approval
 MAX_QA_REVISIONS = 4
+MAX_VISUAL_QA_REVISIONS = 2
 
 
 def _qa_router(state: PresentationState) -> str:
@@ -62,6 +65,29 @@ def _qa_router(state: PresentationState) -> str:
         return "slide_design"
 
 
+def _visual_qa_router(state: PresentationState) -> str:
+    """
+    Conditional edge after Visual QA: loop back to slide_design if
+    visual issues are critical and we haven't exceeded max revisions.
+    """
+    passed = state.get("visual_qa_passed", True)
+    revision_count = state.get("visual_qa_revision_count", 0)
+
+    if passed or revision_count >= MAX_VISUAL_QA_REVISIONS:
+        if not passed:
+            print(
+                f"\n  [Visual QA] Max revisions ({MAX_VISUAL_QA_REVISIONS}) reached. "
+                f"Proceeding with current design."
+            )
+        return "image_generation"
+    else:
+        print(
+            f"\n  [Visual QA] Design needs revision. "
+            f"Routing back to slide_design (pass {revision_count + 1})..."
+        )
+        return "slide_design"
+
+
 def build_graph() -> StateGraph:
     """Build and compile the LangGraph presentation pipeline."""
     graph = StateGraph(PresentationState)
@@ -73,10 +99,11 @@ def build_graph() -> StateGraph:
     graph.add_node("slide_content", slide_content.run)
     graph.add_node("quality_assurance", quality_assurance.run)
     graph.add_node("slide_design", slide_design.run)
+    graph.add_node("visual_qa", visual_qa.run)
     graph.add_node("image_generation", generate_images_for_slides)
     graph.add_node("pptx_render", pptx_render)
 
-    # Define edges (sequential pipeline with one conditional)
+    # Define edges (sequential pipeline with two conditional loops)
     graph.set_entry_point("company_understanding")
     graph.add_edge("company_understanding", "presentation_strategy")
     graph.add_edge("presentation_strategy", "data_grounding")
@@ -93,7 +120,18 @@ def build_graph() -> StateGraph:
         },
     )
 
-    graph.add_edge("slide_design", "image_generation")
+    graph.add_edge("slide_design", "visual_qa")
+
+    # Conditional edge: Visual QA either passes → images, or loops → design
+    graph.add_conditional_edges(
+        "visual_qa",
+        _visual_qa_router,
+        {
+            "image_generation": "image_generation",
+            "slide_design": "slide_design",
+        },
+    )
+
     graph.add_edge("image_generation", "pptx_render")
     graph.add_edge("pptx_render", END)
 
@@ -128,6 +166,8 @@ def generate_presentation(company_name: str) -> str:
         "design_specs": [],
         "image_map": {},
         "pptx_path": "",
+        "visual_qa_passed": None,
+        "visual_qa_revision_count": 0,
     }
 
     # Run the pipeline
@@ -142,6 +182,8 @@ def generate_presentation(company_name: str) -> str:
     print(f"# Slides: {len(final_state.get('slide_contents', []))}")
     print(f"# QA Passes: {final_state.get('qa_revision_count', 0)}")
     print(f"# QA Approved: {final_state.get('qa_report', {}).get('approved', '?')}")
+    print(f"# Visual QA Passes: {final_state.get('visual_qa_revision_count', 0)}")
+    print(f"# Visual QA Passed: {final_state.get('visual_qa_passed', '?')}")
     print(f"{'#'*60}")
 
     # Save intermediate state for debugging

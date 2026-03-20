@@ -34,6 +34,7 @@ def _build_slide_context(grounded_plan: list[dict]) -> str:
         confidence = entry.get("confidence", "unknown")
         data_gaps = entry.get("data_gaps", [])
         chartable = entry.get("chartable_data", [])
+        visual_structs = entry.get("visual_structures", {})
         evidence = entry.get("evidence_chunks", [])
 
         # Format evidence
@@ -46,6 +47,9 @@ def _build_slide_context(grounded_plan: list[dict]) -> str:
             evidence_text = "\n".join(evidence_items)
 
         chartable_text = json.dumps(chartable, indent=2) if chartable else "None"
+        visual_structs_text = (
+            json.dumps(visual_structs, indent=2) if visual_structs else "None"
+        )
 
         parts.append(
             f"""SLIDE: {slide_id}
@@ -55,6 +59,7 @@ Confidence: {confidence}
 Action: {action}
 Data Gaps: {json.dumps(data_gaps)}
 Chartable Data: {chartable_text}
+Visual Structures: {visual_structs_text}
 Evidence:
 {evidence_text}
 """
@@ -100,7 +105,8 @@ QA FEEDBACK FROM PREVIOUS PASS (address these issues):
 
     user_prompt += """
 
-Generate complete slide content for each active slide. Output strict JSON array as specified in your instructions.
+Generate complete slide content for each active slide. Include a visual_intent object for every slide.
+Output strict JSON array as specified in your instructions.
 Every claim must be grounded in the provided evidence — do NOT fabricate data."""
 
     raw_response = call_llm(system_prompt, user_prompt)
@@ -118,6 +124,9 @@ Every claim must be grounded in the provided evidence — do NOT fabricate data.
     print(f"  Generated {len(slide_contents)} slides:")
     for s in slide_contents:
         n_bullets = len(s.get("bullets", []))
-        print(f"    - [{s.get('slide_id')}] {s.get('title')} ({n_bullets} bullets)")
+        vis_type = (s.get("visual_intent") or {}).get("visual_type", "none")
+        print(
+            f"    - [{s.get('slide_id')}] {s.get('title')} ({n_bullets} bullets, visual={vis_type})"
+        )
 
     return {"slide_contents": slide_contents}

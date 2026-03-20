@@ -105,7 +105,9 @@ def run(state: PresentationState) -> dict:
         slide = item["slide"]
         evidence = item["evidence"]
         evidence_text = "\n".join(
-            f"  [{i+1}] (score: {e['score']}) {e['text'][:500]}"
+            f"  [{i+1}] (score: {e['score']}) "
+            f"[hints: {','.join(e.get('metadata', {}).get('content_hints', ['general']))}] "
+            f"{e['text'][:500]}"
             for i, e in enumerate(evidence[:6])
         )
         slides_context.append(
@@ -124,7 +126,7 @@ PLANNED SLIDES WITH RETRIEVED EVIDENCE:
 
 {"---".join(slides_context)}
 
-For each slide, evaluate the evidence quality, extract any chartable numeric data, and decide the action (keep/merge/drop/add).
+For each slide, evaluate the evidence quality, extract any chartable numeric data AND visual structures (timelines, process steps, cycles, comparisons, hierarchies, card items), and decide the action (keep/merge/drop/add).
 Output strict JSON array as specified in your instructions."""
 
     print("  Evaluating evidence and grounding the plan...")
@@ -158,6 +160,14 @@ Output strict JSON array as specified in your instructions."""
     )
     dropped = sum(1 for e in grounded_plan if e.get("action") == "drop")
     added = sum(1 for e in grounded_plan if e.get("action") == "add")
+    vis_count = sum(
+        1
+        for e in grounded_plan
+        if e.get("visual_structures", {}).get("semantic_trigger")
+        and e["visual_structures"]["semantic_trigger"]
+        not in ("narrative_prose", "grouped_metrics")
+    )
     print(f"  Grounded plan: {kept} keep, {merged} merge, {dropped} drop, {added} add")
+    print(f"  Visual structures extracted for {vis_count} slides")
 
     return {"grounded_plan": grounded_plan}
